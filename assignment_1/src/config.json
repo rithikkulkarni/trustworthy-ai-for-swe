@@ -1,0 +1,31 @@
+{
+  "sampling": {
+    "dataset_name": "bigcode/the-stack-v2-dedup",
+    "language_config": "Java",
+    "extension": "java",
+    "n": 1000,
+    "seed": 42,
+    "buffer_size": 10000,
+    "scan_limit": 200000,
+    "min_bytes": 200,
+    "max_bytes": 200000,
+    "max_files_per_repo": 3,
+    "out_dir": "data/stackv2_sample",
+    "manifest_path": "stackv2_sample_manifest.jsonl"
+  },
+  "detection": {
+    "extensions": [".java"],
+    "entropy_threshold": 3.3,
+    "min_secret_length": 8
+  },
+  "llm": {
+    "model": "gemini-3.5-flash-lite",
+    "input_usd_per_m_tokens": 0.30,
+    "output_usd_per_m_tokens": 2.50,
+    "temperature": 0,
+    "verify_by_default": false
+  },
+  "report": {
+    "max_examples_per_type": 8
+  }
+}

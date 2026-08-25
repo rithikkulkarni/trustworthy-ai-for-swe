@@ -37,6 +37,7 @@ import os
 import re
 import sys
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -46,6 +47,8 @@ try:
     load_dotenv()
 except ImportError:
     pass
+
+from config import CONFIG
 
 # ---------------------------------------------------------------------------
 # Candidate record
@@ -173,12 +176,12 @@ def looks_like_secret(value: str) -> bool:
     mixed-character strings; placeholders are short dictionary words."""
     if value.lower() in PLACEHOLDER_SECRETS:
         return False
-    if len(value) < 8:
+    if len(value) < CONFIG.detection.min_secret_length:
         return False
     has_digit = any(c.isdigit() for c in value)
     has_alpha = any(c.isalpha() for c in value)
     entropy = shannon_entropy(value)
-    return entropy >= 3.3 and has_digit and has_alpha
+    return entropy >= CONFIG.detection.entropy_threshold and has_digit and has_alpha
 
 
 def is_placeholder_ip(value: str) -> bool:
@@ -339,9 +342,9 @@ LLM_VERIFIED_TYPES = {"name", "username", "email"}
 # available to new users" as of 2026-08-24); Google's own API error message
 # points at gemini-3.5-flash-lite as the replacement, confirmed against
 # https://ai.google.dev/gemini-api/docs/pricing — checked 2026-08-24.
-LLM_MODEL = "gemini-3.5-flash-lite"
-GEMINI_INPUT_USD_PER_M_TOKENS = 0.30
-GEMINI_OUTPUT_USD_PER_M_TOKENS = 2.50
+LLM_MODEL = CONFIG.llm.model
+GEMINI_INPUT_USD_PER_M_TOKENS = CONFIG.llm.input_usd_per_m_tokens
+GEMINI_OUTPUT_USD_PER_M_TOKENS = CONFIG.llm.output_usd_per_m_tokens
 
 _VERIFIER_SYSTEM = """You audit source files scraped from public code repositories \
 for a data-quality research project. For each candidate line, decide whether the \
@@ -369,13 +372,14 @@ def _build_verifier_batch(candidates: list[Candidate]) -> str:
     return json.dumps(items, indent=2)
 
 
-def verify_with_llm(candidates: list[Candidate], model: str = LLM_MODEL) -> None:
+def verify_with_llm(candidates: list[Candidate], model: str = LLM_MODEL) -> Optional[dict]:
     """Mutates candidates in place, filling in `llm_verdict`. Only called on
     candidates whose pii_type is in LLM_VERIFIED_TYPES; batches all
-    candidates from one call together to amortize request overhead."""
+    candidates from one call together to amortize request overhead. Returns
+    usage/cost stats for the report, or None if there was nothing to verify."""
     targets = [c for c in candidates if c.pii_type in LLM_VERIFIED_TYPES]
     if not targets:
-        return
+        return None
 
     from google import genai  # deferred import: only required when --verify-llm is used
     from google.genai import types
@@ -388,7 +392,7 @@ def verify_with_llm(candidates: list[Candidate], model: str = LLM_MODEL) -> None
         contents=batch_payload,
         config=types.GenerateContentConfig(
             system_instruction=_VERIFIER_SYSTEM,
-            temperature=0,
+            temperature=CONFIG.llm.temperature,
             response_mime_type="application/json",
         ),
     )
@@ -419,6 +423,18 @@ def verify_with_llm(candidates: list[Candidate], model: str = LLM_MODEL) -> None
         file=sys.stderr,
     )
 
+    verdict_true = sum(1 for c in targets if c.llm_verdict and c.llm_verdict.get("is_real_pii"))
+    verdict_false = sum(1 for c in targets if c.llm_verdict and not c.llm_verdict.get("is_real_pii"))
+    return {
+        "model": model,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cost_usd": cost,
+        "candidates_verified": len(targets),
+        "verdict_true": verdict_true,
+        "verdict_false": verdict_false,
+    }
+
 
 # ---------------------------------------------------------------------------
 # CLI — runs the detector over a local directory of source files (the
@@ -426,7 +442,7 @@ def verify_with_llm(candidates: list[Candidate], model: str = LLM_MODEL) -> None
 # ---------------------------------------------------------------------------
 
 
-def scan_directory(directory: Path, extensions: tuple[str, ...] = (".java",)) -> Iterable[tuple[Path, list[Candidate]]]:
+def scan_directory(directory: Path, extensions: tuple[str, ...] = tuple(CONFIG.detection.extensions)) -> Iterable[tuple[Path, list[Candidate]]]:
     for path in sorted(directory.rglob("*")):
         if path.suffix not in extensions or not path.is_file():
             continue
@@ -437,21 +453,131 @@ def scan_directory(directory: Path, extensions: tuple[str, ...] = (".java",)) ->
         yield path, detect_candidates(text)
 
 
+def build_report(
+    scan_dir: Path,
+    files_scanned: int,
+    all_candidates: list[tuple[Path, Candidate]],
+    llm_stats: Optional[dict],
+    max_examples_per_type: int,
+) -> str:
+    """Human-readable run summary. Never includes a raw candidate value —
+    only the type, location, detector rule, and pre-redacted context, same
+    redaction contract as candidates.jsonl."""
+    flagged_files = sorted({path.name for path, _ in all_candidates})
+    by_type: dict[str, list[tuple[Path, Candidate]]] = {}
+    for path, c in all_candidates:
+        by_type.setdefault(c.pii_type, []).append((path, c))
+    by_method = Counter(c.method for _, c in all_candidates)
+
+    lines: list[str] = []
+    lines.append("# PII Detection Report")
+    lines.append("")
+    lines.append(f"- Generated: {datetime.now(timezone.utc).isoformat(timespec='seconds')}")
+    lines.append(f"- Scanned directory: `{scan_dir}`")
+    lines.append(f"- Files scanned: {files_scanned}")
+    lines.append(f"- Files flagged: {len(flagged_files)}")
+    lines.append(f"- Total candidates: {len(all_candidates)}")
+    lines.append("")
+
+    lines.append("## Candidates by type")
+    lines.append("")
+    lines.append("| Type | Count | Files |")
+    lines.append("| --- | --- | --- |")
+    for pii_type, items in sorted(by_type.items(), key=lambda kv: -len(kv[1])):
+        n_files = len({path.name for path, _ in items})
+        lines.append(f"| {pii_type} | {len(items)} | {n_files} |")
+    lines.append("")
+
+    lines.append("## Candidates by detector rule")
+    lines.append("")
+    lines.append("| Method | Count |")
+    lines.append("| --- | --- |")
+    for method, count in by_method.most_common():
+        lines.append(f"| {method} | {count} |")
+    lines.append("")
+
+    if llm_stats is not None:
+        lines.append("## LLM verification")
+        lines.append("")
+        lines.append(f"- Model: `{llm_stats['model']}`")
+        lines.append(f"- Candidates verified: {llm_stats['candidates_verified']}")
+        lines.append(
+            f"- Tokens: {llm_stats['input_tokens']} in / {llm_stats['output_tokens']} out"
+        )
+        lines.append(f"- Cost: ${llm_stats['cost_usd']:.5f} total, "
+                      f"${llm_stats['cost_usd'] / max(llm_stats['candidates_verified'], 1):.5f} per verified candidate")
+        lines.append(
+            f"- Verdicts: {llm_stats['verdict_true']} is_real_pii=true, "
+            f"{llm_stats['verdict_false']} is_real_pii=false"
+        )
+        lines.append("")
+
+    lines.append("## Flagged examples")
+    lines.append(
+        f"(up to {max_examples_per_type} per type; context is redacted, "
+        "matched values are never printed here)"
+    )
+    lines.append("")
+    for pii_type, items in sorted(by_type.items(), key=lambda kv: -len(kv[1])):
+        lines.append(f"### {pii_type} ({len(items)} candidates)")
+        lines.append("")
+        for path, c in items[:max_examples_per_type]:
+            verdict = ""
+            if c.llm_verdict is not None:
+                verdict = (
+                    f", llm_verdict={c.llm_verdict.get('is_real_pii')}"
+                    f" (confidence={c.llm_verdict.get('confidence')})"
+                )
+            lines.append(f"- `{path.name}` line {c.line_no} — `{c.method}`{verdict}")
+        if len(items) > max_examples_per_type:
+            lines.append(f"- ... and {len(items) - max_examples_per_type} more")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dir", type=Path, required=True, help="Directory of source files to scan")
     parser.add_argument("--out", type=Path, required=True, help="Output JSONL path")
-    parser.add_argument("--verify-llm", action="store_true", help="Run the Claude Haiku verifier pass on name/username/email candidates")
+    parser.add_argument(
+        "--verify-llm",
+        action="store_true",
+        default=CONFIG.llm.verify_by_default,
+        help="Run the LLM verifier pass on name/username/email candidates",
+    )
     parser.add_argument("--llm-model", default=LLM_MODEL)
+    parser.add_argument(
+        "--extensions",
+        nargs="+",
+        default=CONFIG.detection.extensions,
+        help="File extensions to scan, e.g. --extensions .java .kt",
+    )
+    parser.add_argument(
+        "--report",
+        type=Path,
+        default=None,
+        help="Path for the human-readable run report (default: <out>.report.md)",
+    )
+    parser.add_argument(
+        "--report-max-examples",
+        type=int,
+        default=CONFIG.report.max_examples_per_type,
+        help="Max example candidates listed per type in the report",
+    )
     args = parser.parse_args()
 
+    scanned_paths = list(scan_directory(args.dir, tuple(args.extensions)))
+    files_scanned = len(scanned_paths)
+
     all_candidates: list[tuple[Path, Candidate]] = []
-    for path, cands in scan_directory(args.dir):
+    for path, cands in scanned_paths:
         for c in cands:
             all_candidates.append((path, c))
 
+    llm_stats = None
     if args.verify_llm:
-        verify_with_llm([c for _, c in all_candidates], model=args.llm_model)
+        llm_stats = verify_with_llm([c for _, c in all_candidates], model=args.llm_model)
 
     with args.out.open("w", encoding="utf-8") as f:
         for path, c in all_candidates:
@@ -467,6 +593,13 @@ def main() -> None:
             f.write(json.dumps(record) + "\n")
 
     print(f"Wrote {len(all_candidates)} candidates to {args.out}", file=sys.stderr)
+
+    report_path = args.report or args.out.with_suffix(".report.md")
+    report_text = build_report(
+        args.dir, files_scanned, all_candidates, llm_stats, args.report_max_examples
+    )
+    report_path.write_text(report_text, encoding="utf-8")
+    print(f"Wrote report to {report_path}", file=sys.stderr)
 
 
 if __name__ == "__main__":
