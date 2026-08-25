@@ -106,17 +106,32 @@ without needing a trained classifier.
 
 ### 2.4 LLM verification stage (implemented, ultimately not needed)
 
-- **Model:** `claude-haiku-4-5`.
+- **Model:** `gemini-3.5-flash-lite`, via the `google-genai` SDK
+  (`google.genai.Client`), reading `GEMINI_API_KEY` from the environment
+  (loaded from a repo-root `.env`, gitignored — never commit or paste that
+  key). Originally built against Claude Haiku 4.5 via the `anthropic` SDK;
+  switched providers on 2026-08-24. `gemini-2.5-flash-lite` — the model
+  first tried — returned `404 NOT_FOUND` ("no longer available to new
+  users"); Google's own error pointed at `gemini-3.5-flash-lite` as the
+  replacement, which is what's wired up now. Also note: passing
+  `thinking_config=ThinkingConfig(thinking_budget=0)` to disable extended
+  thinking, which works on 2.5-series models, returns `400
+  INVALID_ARGUMENT` on `gemini-3.5-flash-lite` — the config field is
+  omitted entirely rather than set to zero.
 - **Prompt:** a fixed system prompt (`_VERIFIER_SYSTEM` in the script)
   instructing the model to label each candidate `is_real_pii` (true/false)
   with a confidence and short reason, distinguishing a real person's
   name/handle/email from a placeholder, a role/bot account, or a non-person
-  identifier that matches the pattern by coincidence.
+  identifier that matches the pattern by coincidence. Called with
+  `temperature=0` and `response_mime_type="application/json"` so the SDK
+  enforces valid JSON output rather than relying on prompt instructions
+  alone.
 - **Batching:** all `name`/`username`/`email` candidates from a run are sent
-  in a single request as a JSON array (one item per candidate, with
-  redacted context), and the model is asked to return a same-length JSON
-  array of verdicts — this amortizes request overhead instead of one call
-  per candidate.
+  in a single request as a JSON array (one item per candidate — including
+  the actual matched value, not the redacted context, since the model needs
+  the real string to judge it), and the model is asked to return a
+  same-length JSON array of verdicts — this amortizes request overhead
+  instead of one call per candidate.
 - **Decision conversion:** each returned `{"id", "is_real_pii", "confidence",
   "reason"}` object is attached back to its `Candidate.llm_verdict` field by
   index; nothing currently *drops* a candidate based on the verdict — it's
@@ -124,22 +139,38 @@ without needing a trained classifier.
   verdict into a hard accept/reject threshold is a natural next step if the
   method is applied somewhere the local heuristics alone aren't precise
   enough.
-- **Cost:** the script prints `input_tokens`, `output_tokens`, and a dollar
-  estimate per run (`$1.00`/M input, `$5.00`/M output tokens, hard-coded in
-  `verify_with_llm`) — that rate should be double-checked against current
-  published Haiku 4.5 pricing before it goes in the report, since it's a
-  constant baked into the script rather than looked up at run time.
-- **Outcome on `data/5`:** not invoked for the result reported below.
-  Running with `--verify-llm` would call the API only for the `email`
-  candidates and the single `name`/`username` candidate each (see §3) — on
-  the order of a few cents total — but the heuristic-only pass already
-  reproduced the intended 6-file/6-type structure, so the LLM pass added no
-  additional signal on this dataset. This is worth stating plainly in the
-  report rather than treating it as a weakness: the assignment rewards a
-  correctly evaluated simple method over an unnecessarily complex one, and
-  here the complex stage turned out to be unnecessary for the specific,
-  narrow definition of "problematic" that `5-privacy.md` uses. It should not
-  be read as evidence the LLM stage is useless in general — see §4.
+- **Cost:** `GEMINI_INPUT_USD_PER_M_TOKENS = 0.30`,
+  `GEMINI_OUTPUT_USD_PER_M_TOKENS = 2.50`, matching Google's published
+  standard-tier rate for `gemini-3.5-flash-lite` as of 2026-08-24
+  (`ai.google.dev/gemini-api/docs/pricing`) — verified live against the API,
+  not assumed. Output-token accounting includes `thoughts_token_count` (the
+  model's extended-thinking tokens are billed as output).
+- **Outcome on `data/5`:** verified end-to-end with a live `--verify-llm`
+  run: 4 of the 8 line-level candidates are `name`/`username`/`email` type
+  and got sent to the model, costing **$0.00071 total** (461 input + 230
+  output tokens) — roughly **$0.00018 per verified candidate**. All 4
+  verdicts agreed with the heuristic-stage label (`is_real_pii: true`,
+  confidence 0.85–0.95), so the LLM pass didn't change the result on this
+  dataset; the heuristic-only pass already reproduced the intended
+  6-file/6-type structure. Worth stating plainly in the report rather than
+  treating it as a weakness: the assignment rewards a correctly evaluated
+  simple method over an unnecessarily complex one, and here the complex
+  stage turned out to be unnecessary for the specific, narrow definition of
+  "problematic" that `5-privacy.md` uses. It should not be read as evidence
+  the LLM stage is useless in general — see §4.
+- **Reliability observation worth reporting:** for the `username` candidate,
+  the model's `reason` text asserted the handle "corresponds to" a specific
+  full person's name that appears nowhere in the candidate's value or
+  context — i.e., it fabricated a plausible-sounding attribution rather
+  than reporting only what it could actually verify from the input. The
+  boolean verdict was still correct, but the free-text justification was
+  not grounded. This is exactly the kind of failure mode worth a paragraph
+  in the report's Limitations section: an LLM verifier's *verdict* and its
+  *stated reasoning* can be reliable and unreliable independently, so
+  `llm_verdict.reason` should be treated as color, not as a citable claim —
+  and never copied verbatim into a report or README, since a hallucinated
+  "real name" is exactly the kind of PII-shaped text the assignment's
+  safety rules ask you not to paste around.
 
 ## 3. Evaluation on `data/5`
 
@@ -257,9 +288,9 @@ over the small fraction that survives the first filter is.
       `signal` instead of the required Stack v2 provenance fields).
 - [ ] Write `README.md` (how to run, dependencies, how instances were
       obtained).
-- [ ] Verify the hard-coded Haiku 4.5 per-token cost rate in
-      `verify_with_llm` against current published pricing before quoting it
-      in the report.
+- [x] ~~Verify the hard-coded per-token cost rate in `verify_with_llm`~~ —
+      done: confirmed live against `ai.google.dev/gemini-api/docs/pricing`
+      and against an actual API call (§2.4).
 - [ ] Decide whether to keep the LLM stage in the final pipeline at all,
       given §3 shows it wasn't needed for the provided dataset — if kept,
       it should be justified for the Stack v2 stage (§5), not for `data/5`.

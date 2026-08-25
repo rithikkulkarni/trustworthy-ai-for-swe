@@ -6,13 +6,17 @@ Pipeline
 1. Regex/heuristic candidate generation per PII type (high recall).
 2. Placeholder/denylist filtering + entropy scoring (precision boost),
    applied without any network call.
-3. Optional LLM verification pass (Claude Haiku 4.5) for the two types
-   where heuristics are semantically weak: `name` and `username`
+3. Optional LLM verification pass (Gemini 2.5 Flash-Lite) for the two
+   types where heuristics are semantically weak: `name` and `username`
    (telling a real person's identifier apart from a class/product name
    or a role account). `password`, `key`, and `ip_address` are never
    sent to the LLM — entropy/shape and RFC-1918 membership are decided
    locally so real-looking secrets are never shipped to a third-party
    API.
+
+The LLM stage reads its API key from the `GEMINI_API_KEY` environment
+variable (loaded from a `.env` file in the repo root if present, via
+python-dotenv). Never commit that file or print its contents.
 
 `detect_candidates(text)` is the reusable core: it takes raw source
 text and returns Candidate objects, independent of where the text came
@@ -35,6 +39,13 @@ import sys
 from collections import Counter
 from pathlib import Path
 from typing import Iterable, Optional
+
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass
 
 # ---------------------------------------------------------------------------
 # Candidate record
@@ -324,7 +335,13 @@ def detect_candidates(text: str) -> list[Candidate]:
 # ---------------------------------------------------------------------------
 
 LLM_VERIFIED_TYPES = {"name", "username", "email"}
-LLM_MODEL = "claude-haiku-4-5"
+# gemini-2.5-flash-lite has been retired for this API key ("no longer
+# available to new users" as of 2026-08-24); Google's own API error message
+# points at gemini-3.5-flash-lite as the replacement, confirmed against
+# https://ai.google.dev/gemini-api/docs/pricing — checked 2026-08-24.
+LLM_MODEL = "gemini-3.5-flash-lite"
+GEMINI_INPUT_USD_PER_M_TOKENS = 0.30
+GEMINI_OUTPUT_USD_PER_M_TOKENS = 2.50
 
 _VERIFIER_SYSTEM = """You audit source files scraped from public code repositories \
 for a data-quality research project. For each candidate line, decide whether the \
@@ -360,19 +377,23 @@ def verify_with_llm(candidates: list[Candidate], model: str = LLM_MODEL) -> None
     if not targets:
         return
 
-    import anthropic  # deferred import: only required when --verify-llm is used
+    from google import genai  # deferred import: only required when --verify-llm is used
+    from google.genai import types
 
-    client = anthropic.Anthropic()
+    client = genai.Client()  # reads GEMINI_API_KEY from the environment
     batch_payload = _build_verifier_batch(targets)
 
-    response = client.messages.create(
+    response = client.models.generate_content(
         model=model,
-        max_tokens=2000,
-        system=_VERIFIER_SYSTEM,
-        messages=[{"role": "user", "content": batch_payload}],
+        contents=batch_payload,
+        config=types.GenerateContentConfig(
+            system_instruction=_VERIFIER_SYSTEM,
+            temperature=0,
+            response_mime_type="application/json",
+        ),
     )
 
-    text = next((b.text for b in response.content if b.type == "text"), "[]")
+    text = response.text or "[]"
     try:
         verdicts = json.loads(text)
     except json.JSONDecodeError:
@@ -384,11 +405,16 @@ def verify_with_llm(candidates: list[Candidate], model: str = LLM_MODEL) -> None
         if idx is not None and 0 <= idx < len(targets):
             targets[idx].llm_verdict = verdict
 
-    usage = response.usage
-    cost = (usage.input_tokens * 1.00 + usage.output_tokens * 5.00) / 1_000_000
+    usage = response.usage_metadata
+    input_tokens = usage.prompt_token_count or 0
+    output_tokens = (usage.candidates_token_count or 0) + (usage.thoughts_token_count or 0)
+    cost = (
+        input_tokens * GEMINI_INPUT_USD_PER_M_TOKENS
+        + output_tokens * GEMINI_OUTPUT_USD_PER_M_TOKENS
+    ) / 1_000_000
     print(
-        f"[llm] model={model} input_tokens={usage.input_tokens} "
-        f"output_tokens={usage.output_tokens} cost=${cost:.5f} "
+        f"[llm] model={model} input_tokens={input_tokens} "
+        f"output_tokens={output_tokens} cost=${cost:.5f} "
         f"candidates_verified={len(targets)}",
         file=sys.stderr,
     )
