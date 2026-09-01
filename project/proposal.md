@@ -50,6 +50,63 @@ Agent Skills bundle natural-language instructions **with executable code** that 
 3. **RQ3**: Does runtime (sandbox) evidence reduce false positives without hurting recall?
 4. **RQ4**: Does the behavior graph catch attacks that are invisible at any single layer?
 
+### Brainstormed System Architecture (subject to change!)
+
+```mermaid
+flowchart TD
+    A["Untrusted Skill Package<br/>SKILL.md + scripts/ + references/ + assets/"]:::det
+
+    subgraph P0["Phase 0 — Ingestion (deterministic)"]
+        A0["Parse YAML frontmatter"]:::det
+        A1["Walk file tree → manifest"]:::det
+    end
+    A --> A0 --> A1
+
+    subgraph P1["Phase 1 — Static Analysis (deterministic)"]
+        B0["AST/regex scan of scripts<br/>(exec calls, network calls, obfuscation, secrets)"]:::det
+        B1["Compute static risk features"]:::det
+    end
+    A1 --> B0 --> B1
+
+    subgraph P2["Phase 2 — ReAct Investigation Loop"]
+        direction TB
+        C0{"LLM: what to investigate next?<br/>read_file / query_rag / run_sandbox / stop"}:::llm
+        C1["Tool exec: read_file(path)"]:::det
+        C2["Tool exec: query_security_rag(query)<br/>vector similarity search"]:::det
+        C3["Tool exec: run_in_sandbox(script)<br/>capture syscalls/network/filesystem"]:::det
+        C4["Observation returned to LLM context"]:::det
+        C0 -->|"read_file"| C1 --> C4
+        C0 -->|"query_rag"| C2 --> C4
+        C0 -->|"run_sandbox"| C3 --> C4
+        C4 -->|"loop"| C0
+    end
+    B1 --> C0
+
+    subgraph P3["Phase 3 — Behavior Graph (deterministic)"]
+        D0["Merge static findings + tool observations<br/>+ sandbox trace into graph<br/>(nodes = entities, edges = data/control flow)"]:::det
+    end
+    C0 -->|"stop"| D0
+
+    subgraph P4["Phase 4 — Verdict"]
+        E0["LLM: reason over behavior graph,<br/>classify + write rationale"]:::llm
+    end
+    D0 --> E0
+
+    E0 --> F0["Serialize verdict + evidence trail"]:::det
+    F0 --> G{"Allow / Block"}
+
+    classDef det fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
+    classDef llm fill:#fce7f3,stroke:#db2777,color:#831843
+```
+
+**Legend:**
+- blue = deterministic code (parsing, scanning, tool execution, graph construction, serialization)
+- pink = LLM reasoning (deciding what to investigate, when to stop, and the final classification + rationale). 
+
+Only the two pink nodes are non-deterministic. Everything else is auditable/testable code, which matters for the transparency/auditability criterion above.
+
+*The auditor sits outside the agent's trust boundary: the skill under review is only ever a subject of investigation (fed into deterministic tool calls), never given control over the verdict logic.*
+
 ### Potential Benchmark Datasets (all public)
 | Dataset | Size | Notes |
 |---|---|---|

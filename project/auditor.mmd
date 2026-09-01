@@ -1,0 +1,12 @@
+flowchart TD
+    A["Untrusted Skill Package<br/>(SKILL.md + scripts/ + references/ + assets/)"] --> B["Static Analysis<br/>(frontmatter, file tree, code scan)"]
+    A --> C["ReAct Agent<br/>(LLM investigator)"]
+    C --> D["Security RAG<br/>(trusted docs, not benchmark data)"]
+    C --> E["Sandbox Execution<br/>(runtime behavior capture)"]
+    B --> F["Behavior Graph<br/>(instruction + code + runtime evidence)"]
+    C --> F
+    D --> F
+    E --> F
+    F --> G{"Verdict"}
+    G --> H["Allow"]
+    G --> I["Block<br/>+ evidence trail"]
