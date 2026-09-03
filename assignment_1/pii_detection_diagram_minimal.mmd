@@ -1,0 +1,8 @@
+flowchart LR
+    A["Single Source Line"] --> B["Stage 1\nRegex candidates\n(per PII type)"]
+    B --> C["Stage 2\nDenylist & entropy\nfilter"]
+    C --> D{"name / username\n/ email?"}
+    D -- yes --> E["Stage 3\nLLM verification\n(Gemini 3.5 Flash-Lite)"]
+    D -- no --> F["Final\ncandidates"]
+    E --> F
+    F --> G["Outputs candidates.jsonl\n& Report"]
