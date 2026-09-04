@@ -1,6 +1,4 @@
 """
-PII/privacy data-quality detector (Assignment 1, Task 5 — TAI4SE).
-
 Pipeline
 --------
 1. Regex/heuristic candidate generation per PII type (high recall).
@@ -10,7 +8,7 @@ Pipeline
    types where heuristics are semantically weak: `name` and `username`
    (telling a real person's identifier apart from a class/product name
    or a role account). `password`, `key`, and `ip_address` are never
-   sent to the LLM — entropy/shape and RFC-1918 membership are decided
+   sent to the LLM. Entropy/shape and RFC-1918 membership are decided
    locally so real-looking secrets are never shipped to a third-party
    API.
 

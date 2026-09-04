@@ -1,5 +1,5 @@
 """
-Build the assignment's required candidates.jsonl from the detector's raw
+Build the required candidates.jsonl from the detector's raw
 output plus the Stack v2 sampling manifest (Assignment 1, Task 5).
 
 pii_detect.py's output is keyed by local filename and carries detection

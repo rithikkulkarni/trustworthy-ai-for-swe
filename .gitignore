@@ -1,2 +1,4 @@
 .env
 assignment_1/data/stackv2_sample/
+**/__pycache__/
+*.py[cod]

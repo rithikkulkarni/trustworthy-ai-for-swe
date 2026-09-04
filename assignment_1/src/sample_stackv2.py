@@ -1,7 +1,7 @@
 """
-Sample a subset of The Stack v2 for PII detection (Assignment 1, Task 5).
+Sample a subset of The Stack v2 for PII detection.
 
-Strategy (see 5-privacy-design.md and the sampling discussion in the report):
+Strategy:
 - Java only, from bigcode/the-stack-v2-dedup (near-dedup split, to avoid the
   fork/copy-paste duplication problem noted in the detector's limitations).
 - Streamed and shuffled with a fixed seed for reproducibility.
