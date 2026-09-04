@@ -1,6 +1,7 @@
 {
   "sampling": {
     "dataset_name": "bigcode/the-stack-v2-dedup",
+    "dataset_revision": "611ef38fbfab78b65b38be47e870e4b3d70de038",
     "language_config": "Java",
     "extension": "java",
     "n": 3000,

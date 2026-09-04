@@ -19,6 +19,7 @@ _CONFIG_PATH = Path(__file__).parent / "config.json"
 @dataclass
 class SamplingConfig:
     dataset_name: str
+    dataset_revision: str
     language_config: str
     extension: str
     n: int

@@ -34,7 +34,7 @@ load_dotenv()
 from config import CONFIG  # noqa: E402 - after load_dotenv, before use
 
 
-def build_stream(hf_token: str, dataset_name: str, language_config: str, seed: int, buffer_size: int):
+def build_stream(hf_token: str, dataset_name: str, dataset_revision: str, language_config: str, seed: int, buffer_size: int):
     from datasets import load_dataset
 
     ds = load_dataset(
@@ -43,6 +43,7 @@ def build_stream(hf_token: str, dataset_name: str, language_config: str, seed: i
         split="train",
         streaming=True,
         token=hf_token,
+        revision=dataset_revision,
     )
     ds = ds.shuffle(seed=seed, buffer_size=buffer_size)
     return ds
@@ -73,6 +74,12 @@ def main() -> None:
     sc = CONFIG.sampling
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset-name", default=sc.dataset_name)
+    parser.add_argument(
+        "--dataset-revision",
+        default=sc.dataset_revision,
+        help="Pinned dataset commit SHA, so a re-run reproduces the same "
+             "shuffled stream even if the dataset's default branch moves",
+    )
     parser.add_argument("--language-config", default=sc.language_config)
     parser.add_argument("--extension", default=sc.extension)
     parser.add_argument("--n", type=int, default=sc.n, help="Target sample size (post-filter)")
@@ -107,7 +114,7 @@ def main() -> None:
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    stream = build_stream(hf_token, args.dataset_name, args.language_config, args.seed, args.buffer_size)
+    stream = build_stream(hf_token, args.dataset_name, args.dataset_revision, args.language_config, args.seed, args.buffer_size)
 
     per_repo_count: dict[str, int] = {}
     kept = 0
