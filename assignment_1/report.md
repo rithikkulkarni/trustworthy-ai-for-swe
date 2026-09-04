@@ -146,31 +146,41 @@ pure regex.
 
 ### 3.2 Application to The Stack v2
 
-**Sampling.** 1,000 `.java` files streamed from `bigcode/the-stack-v2-dedup`
+**Sampling.** 3,000 `.java` files streamed from `bigcode/the-stack-v2-dedup`
 (the near-dedup split, chosen to blunt the fork/copy-paste duplication
 problem noted below), shuffled with a fixed seed (42) for reproducibility.
 Filtered out generated/vendored files and files outside a 200 B–200 KB size
 range; capped at 3 files per `repo_name` so one popular or heavily forked
-repository could not dominate the sample. Provenance for every sampled file
+repository could not dominate the sample — the cap barely engaged (2,979
+unique repos across 3,000 files). Provenance for every sampled file
 (`blob_id`, `src_encoding`, `repo_name`, `path`, revision/snapshot/
-directory_id) was recorded to a manifest for later traceability.
+directory_id) was recorded to a manifest for later traceability. An initial
+1,000-file pass found `name`/`email`/`username`/`ip_address` candidates but
+zero `password` or `key`; the sample was extended to 3,000 files (same
+seed, same filters — the larger sample's first 1,000 files are identical to
+the original pass) specifically to get representation from all six types.
 
 **Run.** The full pipeline (heuristics + `--verify-llm`) was applied to the
-1,000-file sample.
+3,000-file sample.
 
 | Metric | Value |
 | --- | --- |
-| Files scanned | 1,000 |
-| Files flagged | 88 |
-| Total candidates | 126 |
-| Candidates by type | `name` 73, `email` 32, `username` 11, `ip_address` 10 |
-| LLM candidates verified | 116 |
-| LLM cost | $0.01725 total ($0.00015/candidate) |
-| LLM verdicts | 105 `is_real_pii=true`, 11 `is_real_pii=false` |
+| Files scanned | 3,000 |
+| Files flagged | 256 |
+| Total candidates | 342 |
+| Candidates by type | `name` 175, `email` 101, `username` 36, `ip_address` 28, `password` 1, `key` 1 |
+| LLM candidates verified | 312 |
+| LLM cost | $0.04587 total ($0.00015/candidate) |
+| LLM verdicts | 272 `is_real_pii=true`, 40 `is_real_pii=false` |
 
-No `password` or `key` candidates were found in this particular sample —
-consistent with those being rarer, higher-variance events at this sample
-size rather than a detector gap (both fired correctly on `data/5`).
+At 3,000 files, one instance each of `password` and `key` appeared — a
+`PWD = "..."` field assignment and a `DEVELOPER_KEY = "..."` Google API key
+assignment, both caught by the same detector rules validated on `data/5`.
+Their scarcity here (2 hits in 3,000 files vs. 2 hits in 206 curated files)
+is itself informative: `data/5` was deliberately constructed to contain one
+of each type, so it overstates how often `password`/`key` literals appear
+in unfiltered real code relative to `name`/`email`, which concentrate
+naturally in author-credit boilerplate and contact-info comments.
 
 **Representative success case.** `00007_8d38afc7a12d.java`, line 3: a
 `Written by:` authorship comment matched the `name` detector twice (two
@@ -239,3 +249,59 @@ cleaner training corpora: cheap deterministic filtering for the unambiguous
 majority, a selective semantic pass reserved for the genuinely ambiguous
 minority that survives the first filter — never running an LLM over every
 file, but running it over the small fraction that needs judgment.
+
+---
+
+## Draft additions (for the two gaps flagged in the PDF review — pull into place, then delete this section)
+
+### For §2.3 (LLM Verification) — one sentence on what the prompt asks
+
+Drop this in wherever the model name/temperature/cost currently sit, before or
+after the decision-conversion sentence:
+
+> The system prompt instructs the model to label each candidate
+> `is_real_pii` (true/false) with a confidence and short reason,
+> distinguishing a real person's name, handle, or email from a placeholder,
+> a role/bot account, or a non-person identifier that merely matches the
+> regex shape by coincidence.
+
+### For §3.2 (Application to The Stack v2) — manual-inspection count
+
+Numbers, computed just now directly from `stackv2_candidates.jsonl`:
+
+- **50 of the 342 candidates were manually inspected** (the first 50 in
+  detection order — not cherry-picked), reading each one's redacted context
+  and, where present, its LLM verdict.
+- Of those 50: **49 had an LLM verdict** (40 `is_real_pii=true`, 9 `false`)
+  and **manual reading agreed with the LLM's verdict in all 49/49 cases** —
+  including the 9 cases where the LLM overrode a heuristic-stage false
+  positive (a `username:assign` regex firing inside a log-message string
+  concatenation, twice; a `setFrom()` system/rejection-notice address; and
+  five near-identical `email` hits inside one Javadoc block that was really
+  REST-API usage documentation, not a personal disclosure).
+- The remaining **1 of the 50 had no LLM verdict** — an `ip_address`
+  candidate (`00192_d1f3b7d9da9a.java` line 212), which bypasses the LLM
+  stage by design (see §2, password/key/ip_address are never sent to the
+  LLM). Manual inspection found it to be a false positive the pipeline
+  currently has no way to catch: a JD-Core decompiler version banner
+  (`JD-Core Version: 0.7.0.1`) whose four-part dotted format happens to
+  match valid IPv4 shape. Worth stating directly: this is the one type
+  with zero semantic disambiguation, by design, and this is a concrete
+  instance of that trade-off actually firing.
+
+Suggested one-line summary if space is tight: "50 of the 342 candidates
+were manually inspected; manual judgment agreed with the LLM verdict in
+49/49 cases with a verdict, and surfaced one additional false positive
+(an `ip_address` match on a decompiler version string) in the one type the
+LLM never sees."
+
+A secondary, code-level finding from this same manual pass (optional, cut
+if space doesn't allow): three redaction bugs were found and fixed in
+`pii_detect.py` during the review — none changed detection counts or the
+`data/5` 100% baseline, but each was closing a real leak in the
+human-readable context field itself (a partial name match leaving a
+trailing surname/hyphenated-surname fragment unredacted, and a non-Latin
+transliteration of an already-redacted name left exposed). Worth a
+one-clause mention in Limitations as evidence that manual review at the
+"read the actual outputs" level catches classes of error that aggregate
+precision/recall on `data/5` cannot.

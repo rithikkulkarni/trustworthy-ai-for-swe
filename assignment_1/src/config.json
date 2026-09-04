@@ -3,7 +3,7 @@
     "dataset_name": "bigcode/the-stack-v2-dedup",
     "language_config": "Java",
     "extension": "java",
-    "n": 1000,
+    "n": 3000,
     "seed": 42,
     "buffer_size": 10000,
     "scan_limit": 200000,

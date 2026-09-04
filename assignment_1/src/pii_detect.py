@@ -66,15 +66,63 @@ class Candidate:
     llm_verdict: Optional[dict] = None  # filled in by the LLM verifier stage
 
 
-def _redact(line: str, value: str) -> str:
-    if not value:
-        return line
-    return line.replace(value, "*" * min(len(value), 8))
+# A name/username continuation directly touching a matched value's own
+# text: an extra given name, a second surname, a hyphenated compound
+# surname ("Firstname Lastname-Other", "Firstname Middle Lastname"), or a
+# non-Latin rendering of the same identity sitting right next to its
+# transliteration ("Chill Zhuang 庄骞" — the regex only matches the Latin
+# portion, but the adjacent CJK text is the same person's name). `name`
+# only ever matches exactly two capitalized ASCII words, so this covers
+# real identifying text the regex itself didn't capture. Anchored to the
+# matched value's literal text (not to "any run of asterisks") so this
+# can never fire on an incidental asterisk elsewhere in the source, e.g.
+# Javadoc's leading "* " comment marker.
+_NAME_CONTINUATION_RE = (
+    r"(?:[ \t]+[A-Z][a-zA-Z']+|-[A-Za-z]+|[ \t(]+[^\x00-\x7F][^\x00-\x7F \t.,()]*){0,3}"
+)
 
 
-def _context(lines: list[str], idx: int, value: str) -> str:
+def _redact_all(text: str, values: list[str]) -> str:
+    """Redact every given value found in `text`, plus any name-shaped
+    continuation immediately touching it. Longest-first so a short value
+    (e.g. a first name) can't clobber part of a longer overlapping match
+    before it's redacted."""
+    for value in sorted(set(v for v in values if v), key=len, reverse=True):
+        mask = "*" * min(len(value), 8)
+        pattern = re.compile(re.escape(value) + _NAME_CONTINUATION_RE)
+        text = pattern.sub(mask, text)
+    return text
+
+
+def _redact_incidental_names(text: str) -> str:
+    """Defensive safety net, applied only to already-built context text:
+    also mask any other two-capitalized-word name shape that wasn't itself
+    a detected candidate. `name` detection is deliberately gated on an
+    explicit authorship marker (@author, "created by", ...), so a real
+    name in, say, a Copyright-line attribution is invisible to detection —
+    but would otherwise still leak here in the clear purely because it
+    shares a line with an unrelated flagged candidate (e.g. an email).
+    This never adds a candidate or triggers an LLM call; it only changes
+    what the human-readable report shows."""
+    for m in NAME_CANDIDATE_RE.finditer(text):
+        value = m.group(1)
+        if not is_placeholder_name(value):
+            mask = "*" * min(len(value), 8)
+            pattern = re.compile(re.escape(value) + _NAME_CONTINUATION_RE)
+            text = pattern.sub(mask, text)
+    return text
+
+
+def _context(lines: list[str], idx: int, window_values: list[str]) -> str:
+    """+/- 1 line of surrounding source, with every PII value found
+    anywhere in that window redacted — not just the one candidate this
+    context belongs to. Without this, two real values on the same or an
+    adjacent line (e.g. two co-authors credited together) would each
+    unredact the other."""
     lo, hi = max(0, idx - 1), min(len(lines), idx + 2)
-    return "\n".join(_redact(lines[i], value) for i in range(lo, hi))
+    text = "\n".join(lines[lo:hi])
+    text = _redact_all(text, window_values)
+    return _redact_incidental_names(text)
 
 
 # ---------------------------------------------------------------------------
@@ -307,28 +355,42 @@ def _find_name(line: str) -> list[tuple[str, str, dict]]:
 
 def detect_candidates(text: str) -> list[Candidate]:
     lines = text.splitlines()
-    candidates: list[Candidate] = []
-    for idx, line in enumerate(lines):
-        line_no = idx + 1
 
+    # Pass 1: find every match on every line, across all six types, before
+    # building any context string. This lets pass 2 redact *all* PII-shaped
+    # values in a context window, not just the one candidate it belongs to
+    # (otherwise two real values on the same/adjacent line, e.g. two
+    # co-authors credited together, would each unredact the other).
+    per_line_matches: list[list[tuple[str, str, str, dict]]] = []
+    for line in lines:
+        matches: list[tuple[str, str, str, dict]] = []
         for value, method, signal in _find_email(line):
-            candidates.append(Candidate("email", line_no, value, method,
-                                         _context(lines, idx, value), signal))
+            matches.append(("email", value, method, signal))
         for value, method, signal in _find_ip(line):
-            candidates.append(Candidate("ip_address", line_no, value, method,
-                                         _context(lines, idx, value), signal))
+            matches.append(("ip_address", value, method, signal))
         for value, method, signal in _find_key(line):
-            candidates.append(Candidate("key", line_no, value, method,
-                                         _context(lines, idx, value), signal))
+            matches.append(("key", value, method, signal))
         for value, method, signal in _find_password(line):
-            candidates.append(Candidate("password", line_no, value, method,
-                                         _context(lines, idx, value), signal))
+            matches.append(("password", value, method, signal))
         for value, method, signal in _find_username(line):
-            candidates.append(Candidate("username", line_no, value, method,
-                                         _context(lines, idx, value), signal))
+            matches.append(("username", value, method, signal))
         for value, method, signal in _find_name(line):
-            candidates.append(Candidate("name", line_no, value, method,
-                                         _context(lines, idx, value), signal))
+            matches.append(("name", value, method, signal))
+        per_line_matches.append(matches)
+
+    # Pass 2: build each candidate with a context redacted against every
+    # value found anywhere in its +/- 1 line window.
+    candidates: list[Candidate] = []
+    for idx, matches in enumerate(per_line_matches):
+        if not matches:
+            continue
+        line_no = idx + 1
+        lo, hi = max(0, idx - 1), min(len(lines), idx + 2)
+        window_values = [value for window_matches in per_line_matches[lo:hi]
+                          for (_, value, _, _) in window_matches]
+        for pii_type, value, method, signal in matches:
+            context = _context(lines, idx, window_values)
+            candidates.append(Candidate(pii_type, line_no, value, method, context, signal))
     return candidates
 
 
