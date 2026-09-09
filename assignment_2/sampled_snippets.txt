@@ -1,0 +1,311 @@
+================================================================================
+PAIR 0
+================================================================================
+
+--- pair0A (func_id=4542694) ---
+    @Override
+    public InputStream getInputStream() throws IOException {
+        if (dfos == null) {
+            int deferredOutputStreamThreshold = Config.getInstance().getDeferredOutputStreamThreshold();
+            dfos = new DeferredFileOutputStream(deferredOutputStreamThreshold, Definitions.PROJECT_NAME, "." + Definitions.TMP_EXTENSION);
+            try {
+                IOUtils.copy(is, dfos);
+            } finally {
+                dfos.close();
+            }
+        }
+        return dfos.getDeferredInputStream();
+    }
+
+
+--- pair0B (func_id=9621596) ---
+    public String merge(int width, int height) throws Exception {
+        htErrors.clear();
+        sendGetImageRequests(width, height);
+        Vector files = new Vector();
+        ConcurrentHTTPTransactionHandler c = new ConcurrentHTTPTransactionHandler();
+        c.setCache(cache);
+        c.checkIfModified(false);
+        for (int i = 0; i < vImageUrls.size(); i++) {
+            if ((String) vImageUrls.get(i) != null) {
+                c.register((String) vImageUrls.get(i));
+            } else {
+            }
+        }
+        c.doTransactions();
+        vTransparency = new Vector();
+        for (int i = 0; i < vImageUrls.size(); i++) {
+            if (vImageUrls.get(i) != null) {
+                String path = c.getResponseFilePath((String) vImageUrls.get(i));
+                if (path != null) {
+                    String contentType = c.getHeaderValue((String) vImageUrls.get(i), "content-type");
+                    if (contentType.startsWith("image")) {
+                        files.add(path);
+                        vTransparency.add(htTransparency.get(vRank.get(i)));
+                    }
+                }
+            }
+        }
+        if (files.size() > 1) {
+            File output = TempFiles.getFile();
+            String path = output.getPath();
+            ImageMerger.mergeAndSave(files, vTransparency, path, ImageMerger.GIF);
+            imageName = output.getName();
+            imagePath = output.getPath();
+            return (imageName);
+        } else if (files.size() == 1) {
+            File f = new File((String) files.get(0));
+            File out = TempFiles.getFile();
+            BufferedInputStream is = new BufferedInputStream(new FileInputStream(f));
+            BufferedOutputStream os = new BufferedOutputStream(new FileOutputStream(out));
+            byte buf[] = new byte[1024];
+            for (int nRead; (nRead = is.read(buf, 0, 1024)) > 0; os.write(buf, 0, nRead)) ;
+            os.flush();
+            os.close();
+            is.close();
+            imageName = out.getName();
+            return imageName;
+        } else return "";
+    }
+
+
+================================================================================
+PAIR 1
+================================================================================
+
+--- pair1A (func_id=13612487) ---
+    private ArrayList<String> loadProperties(String filename) throws DevFailed, IOException {
+        java.net.URL url = getClass().getResource(filename);
+        if (url == null) {
+            Except.throw_exception("LOAD_PROPERTY_FAILED", "URL for property file (" + filename + ") is null !", "PogoProperty.loadProperties()");
+            return null;
+        }
+        InputStream is = url.openStream();
+        BufferedReader br = new BufferedReader(new InputStreamReader(is));
+        ArrayList<String> vs = new ArrayList<String>();
+        String str;
+        while ((str = br.readLine()) != null) {
+            str = str.trim();
+            if (!str.startsWith("#")) if (str.length() > 0) vs.add(str);
+        }
+        br.close();
+        return vs;
+    }
+
+
+--- pair1B (func_id=21808205) ---
+    public static String ReadURLString(String str) throws IOException {
+        try {
+            URL url = new URL(str);
+            InputStream is = url.openStream();
+            InputStreamReader isr = new InputStreamReader(is);
+            BufferedReader in = new BufferedReader(isr);
+            String inputLine;
+            String line = "";
+            int i = 0;
+            while ((inputLine = in.readLine()) != null) {
+                line += inputLine + "\n";
+            }
+            is.close();
+            isr.close();
+            in.close();
+            return line;
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return "";
+    }
+
+
+================================================================================
+PAIR 2
+================================================================================
+
+--- pair2A (func_id=16663549) ---
+    private void prepareQueryResultData(ZipEntryRef zer, String nodeDir, String reportDir, Set<ZipEntryRef> statusZers) throws Exception {
+        String jobDir = nodeDir + File.separator + "job_" + zer.getUri();
+        if (!WorkDirectory.isWorkingDirectoryValid(jobDir)) {
+            throw new Exception("Cannot acces to " + jobDir);
+        }
+        File f = new File(jobDir + File.separator + "result.xml");
+        if (!f.exists() || !f.isFile() || !f.canRead()) {
+            throw new Exception("Cannot acces to result file " + f.getAbsolutePath());
+        }
+        String fcopyName = reportDir + File.separator + zer.getName() + ".xml";
+        BufferedInputStream bis = new BufferedInputStream(new FileInputStream(f));
+        BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(fcopyName));
+        IOUtils.copy(bis, bos);
+        bis.close();
+        bos.close();
+        zer.setUri(fcopyName);
+        f = new File(jobDir + File.separator + "status.xml");
+        if (!f.exists() || !f.isFile() || !f.canRead()) {
+            throw new Exception("Cannot acces to status file " + f.getAbsolutePath());
+        }
+        fcopyName = reportDir + File.separator + zer.getName() + "_status.xml";
+        bis = new BufferedInputStream(new FileInputStream(f));
+        bos = new BufferedOutputStream(new FileOutputStream(fcopyName));
+        IOUtils.copy(bis, bos);
+        bis.close();
+        bos.close();
+        statusZers.add(new ZipEntryRef(ZipEntryRef.SINGLE_FILE, zer.getName(), fcopyName, ZipEntryRef.WITH_REL));
+    }
+
+
+--- pair2B (func_id=17891160) ---
+    public void testBeAbleToDownloadAndUpload() throws IOException {
+        OutputStream outputStream = fileSystem.createOutputStream(_("hello"), OutputMode.OVERWRITE);
+        outputStream.write(new byte[] { 1, 2, 3 });
+        outputStream.close();
+        InputStream inputStream = fileSystem.createInputStream(_("hello"));
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        IOUtils.copy(inputStream, buffer);
+        inputStream.close();
+        ensure.that(buffer.toByteArray()).eq(new byte[] { 1, 2, 3 });
+    }
+
+
+================================================================================
+PAIR 3
+================================================================================
+
+--- pair3A (func_id=2424996) ---
+    protected void migrateOnDemand() {
+        try {
+            if (fso.fileExists(prefix + ".fat") && !fso.fileExists(prefix + EXTENSIONS[UBM_FILE])) {
+                RandomAccessFile ubm, meta, ctr, rbm;
+                InputStream inputStream;
+                OutputStream outputStream;
+                fso.renameFile(prefix + ".fat", prefix + EXTENSIONS[UBM_FILE]);
+                ubm = fso.openFile(prefix + EXTENSIONS[UBM_FILE], "rw");
+                meta = fso.openFile(prefix + EXTENSIONS[MTD_FILE], "rw");
+                ctr = fso.openFile(prefix + EXTENSIONS[CTR_FILE], "rw");
+                ubm.seek(ubm.length() - 16);
+                meta.writeInt(blockSize = ubm.readInt());
+                meta.writeInt(size = ubm.readInt());
+                ctr.setLength(ubm.readLong() + blockSize);
+                ctr.close();
+                meta.close();
+                ubm.setLength(ubm.length() - 16);
+                ubm.seek(0);
+                rbm = fso.openFile(prefix + EXTENSIONS[UBM_FILE], "rw");
+                inputStream = new BufferedInputStream(new RandomAccessFileInputStream(ubm));
+                outputStream = new BufferedOutputStream(new RandomAccessFileOutputStream(rbm));
+                for (int b; (b = inputStream.read()) != -1; ) outputStream.write(b);
+                outputStream.close();
+                inputStream.close();
+                rbm.close();
+                ubm.close();
+            }
+        } catch (IOException ie) {
+            throw new WrappingRuntimeException(ie);
+        }
+    }
+
+
+--- pair3B (func_id=12528438) ---
+            @Override
+            public void handle(String s, HttpServletRequest httpServletRequest, HttpServletResponse httpServletResponse, int i) throws IOException, ServletException {
+                System.out.println("uri: " + httpServletRequest.getRequestURI());
+                System.out.println("queryString: " + httpServletRequest.getQueryString());
+                System.out.println("method: " + httpServletRequest.getMethod());
+                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                IOUtils.copy(httpServletRequest.getInputStream(), baos);
+                System.out.println("body: " + baos.toString());
+                PrintWriter writer = httpServletResponse.getWriter();
+                writer.append("testsvar");
+                Random r = new Random();
+                for (int j = 0; j < 10; j++) {
+                    int value = r.nextInt(Integer.MAX_VALUE);
+                    writer.append(value + "");
+                }
+                System.out.println();
+                writer.close();
+                httpServletResponse.setStatus(HttpServletResponse.SC_OK);
+            }
+
+
+================================================================================
+PAIR 4
+================================================================================
+
+--- pair4A (func_id=12082135) ---
+    public static Set<Province> getProvincias(String pURL) {
+        Set<Province> result = new HashSet<Province>();
+        String iniProv = "<prov>";
+        String finProv = "</prov>";
+        String iniNomProv = "<np>";
+        String finNomProv = "</np>";
+        String iniCodigo = "<cpine>";
+        String finCodigo = "</cpine>";
+        int ini, fin;
+        try {
+            URL url = new URL(pURL);
+            BufferedReader br = new BufferedReader(new InputStreamReader(url.openStream()));
+            String str;
+            Province provincia;
+            while ((str = br.readLine()) != null) {
+                if (str.contains(iniProv)) {
+                    provincia = new Province();
+                    while ((str = br.readLine()) != null && !str.contains(finProv)) {
+                        if (str.contains(iniNomProv)) {
+                            ini = str.indexOf(iniNomProv) + iniNomProv.length();
+                            fin = str.indexOf(finNomProv);
+                            provincia.setDescription(str.substring(ini, fin));
+                        }
+                        if (str.contains(iniCodigo)) {
+                            ini = str.indexOf(iniCodigo) + iniCodigo.length();
+                            fin = str.indexOf(finCodigo);
+                            provincia.setCodeProvince(Integer.parseInt(str.substring(ini, fin)));
+                        }
+                    }
+                    result.add(provincia);
+                }
+            }
+            br.close();
+        } catch (Exception e) {
+            System.err.println(e);
+        }
+        return result;
+    }
+
+
+--- pair4B (func_id=18248689) ---
+    @SuppressWarnings("unchecked")
+    private List<String> getWordList() {
+        IConfiguration config = Configurator.getDefaultConfigurator().getConfig(CONFIG_ID);
+        List<String> wList = (List<String>) config.getObject("word_list");
+        if (wList == null) {
+            wList = new ArrayList<String>();
+            InputStream resrc = null;
+            try {
+                resrc = new URL(list_url).openStream();
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            if (resrc != null) {
+                BufferedReader br = new BufferedReader(new InputStreamReader(resrc));
+                String line;
+                try {
+                    while ((line = br.readLine()) != null) {
+                        line = line.trim();
+                        if (line.length() != 0) {
+                            wList.add(line);
+                        }
+                    }
+                } catch (IOException e) {
+                    e.printStackTrace();
+                } finally {
+                    if (br != null) {
+                        try {
+                            br.close();
+                        } catch (IOException e) {
+                        }
+                    }
+                }
+            }
+        }
+        return wList;
+    }
+
+

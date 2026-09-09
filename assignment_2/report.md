@@ -9,7 +9,7 @@
 - **Visualization**: scikit-learn `TSNE` (`perplexity=4`, since the default of 30 is invalid for only 10
   samples), PCA initialization, fixed random state.
 - Full runnable pipeline is in [`assignment2.ipynb`](assignment2.ipynb); figure saved as
-  [`tsne_codebert_clone_pairs.png`](tsne_codebert_clone_pairs.png).
+  [`tsne_codebert_clone_pairs.png`](TSNE_embeddings_visual.png).
 
 ## What we observed
 
