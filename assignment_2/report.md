@@ -1,4 +1,4 @@
-# Assignment 2 — Code Embedding and Visualization: Findings
+# Assignment 2 README - Code Embedding and Visualization
 
 ## Setup
 
